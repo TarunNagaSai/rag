@@ -1,0 +1,17 @@
+FROM python:3.14.6-slim
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR /app
+
+ENV PATH="/app/.venv/bin:$PATH" \
+    UV_COMPILE_BYTECODE=0 \
+    WATCHFILES_FORCE_POLLING=true
+
+# Install deps into the image so the named-volume mount gets them on first run.
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev --no-install-project
+
+EXPOSE 8000
+
+CMD ["uvicorn", "advanced_rag.api:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

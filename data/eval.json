@@ -1,0 +1,22 @@
+[
+  {
+    "question": "Which enterprise customers renewed in Q2 2025 and also opened an SSO support ticket?",
+    "expected_sources": ["acme_customers.md"],
+    "ideal_answer": "Northwind Traders (SSO-4412) and Umbrella Health (SSO-4450). Globex opened an SSO ticket but did not renew."
+  },
+  {
+    "question": "Who resolved Northwind Traders' SSO ticket, and what was the ticket about?",
+    "expected_sources": ["acme_customers.md"],
+    "ideal_answer": "Marcus Lee resolved ticket SSO-4412, which was about SAML SSO failing for their Azure AD integration."
+  },
+  {
+    "question": "Which plans include SCIM provisioning?",
+    "expected_sources": ["acme_product.md"],
+    "ideal_answer": "Only the Platinum plan includes SCIM user provisioning."
+  },
+  {
+    "question": "What add-on is required for SOC 2 customers, and which customer is subject to SOC 2?",
+    "expected_sources": ["acme_product.md", "acme_customers.md"],
+    "ideal_answer": "Audit Log Export (SKU AL-110) is required for SOC 2; Umbrella Health is subject to SOC 2."
+  }
+]
