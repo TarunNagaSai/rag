@@ -1,8 +1,11 @@
 "use client";
 
+import MarkdownIt from "markdown-it";
 import { Copy, FileText, TrendingUp } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Message } from "@/types";
+
+const md = new MarkdownIt({ linkify: true, breaks: true });
 
 export function MessageBubble({ message }: { message: Message }) {
   const isUser = message.role === "user";
@@ -34,9 +37,11 @@ export function MessageBubble({ message }: { message: Message }) {
         {message.pending ? (
           <TypingIndicator />
         ) : (
-          <div className="text-sm leading-relaxed text-[var(--foreground)]">
-            <p className="whitespace-pre-wrap">{message.content}</p>
-          </div>
+          <div
+            className="markdown"
+            // markdown-it output is sanitised (no HTML input from users)
+            dangerouslySetInnerHTML={{ __html: md.render(message.content) }}
+          />
         )}
 
         {message.citations && message.citations.length > 0 && (
