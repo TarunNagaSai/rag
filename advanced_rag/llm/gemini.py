@@ -10,7 +10,7 @@ Why a wrapper at all? Three reasons:
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Type, TypeVar
 
 import numpy as np
@@ -64,6 +64,24 @@ class Gemini:
                 max_output_tokens=s.max_output_tokens,
             ),
         ):
+            if chunk.text:
+                yield chunk.text
+
+    async def generate_content_stream_async(
+        self, prompt: str, settings: ModelSettings | None = None
+    ) -> AsyncIterator[str]:
+        """Async version — yields chunks without blocking the event loop."""
+        s = settings or ModelSettings()
+        stream = await self.client.aio.models.generate_content_stream(
+            model=s.model or self.s.gen_model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=s.system,
+                temperature=s.temperature,
+                max_output_tokens=s.max_output_tokens,
+            ),
+        )
+        async for chunk in stream:
             if chunk.text:
                 yield chunk.text
 

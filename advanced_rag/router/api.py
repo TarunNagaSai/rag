@@ -309,7 +309,7 @@ async def ask_stream(req: AskRequest) -> StreamingResponse:
         for attempt in range(4):
             started = False
             try:
-                for chunk in p.g.generate_content_stream(req.question):
+                async for chunk in p.g.generate_content_stream_async(req.question):
                     started = True
                     yield f"data: {json.dumps({'type': 'chunk', 'text': chunk})}\n\n"
                 yield "data: [DONE]\n\n"
@@ -322,7 +322,11 @@ async def ask_stream(req: AskRequest) -> StreamingResponse:
                 yield "data: [DONE]\n\n"
                 return
 
-    return StreamingResponse(event_gen(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/reset")

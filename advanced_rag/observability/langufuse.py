@@ -1,3 +1,1 @@
-from openinference.instrumentation.google_genai import GoogleGenAIInstrumentor
-
-GoogleGenAIInstrumentor().instrument()
+# Langfuse observability — built from scratch during /learn session.

@@ -15,8 +15,22 @@ __pycache__/
 Dockerfile
 .dockerignore
 
+# Secrets / env (injected at runtime via compose env_file)
+.env
+.env.*
+
 # Project
 README.md
 CLAUDE.md
 infra/
 tests/
+
+# Not needed by the backend image
+ui/
+frontend/
+data/
+docs/
+examples/
+.arag_index/
+.claude/
+.zed/
