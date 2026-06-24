@@ -20,9 +20,9 @@ from typing import Any, Callable
 import numpy as np
 from rank_bm25 import BM25Okapi
 
-from .config import Settings, get_settings
-from .gemini import Gemini
-from .schema import Chunk, Scored
+from advanced_rag.core.config import Settings, get_settings
+from advanced_rag.llm.gemini import Gemini
+from advanced_rag.schema.schema import Chunk, Scored
 
 _TOKEN = re.compile(r"[A-Za-z0-9_]+")
 

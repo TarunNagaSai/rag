@@ -12,9 +12,9 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
-from .config import Settings, get_settings
-from .gemini import Gemini
-from .schema import Scored
+from advanced_rag.core.config import Settings, get_settings
+from advanced_rag.llm.gemini import Gemini
+from advanced_rag.schema.schema import ModelSettings, Scored
 
 
 class Grade(str, Enum):
@@ -51,6 +51,8 @@ class CRAG:
                 f"QUESTION: {question}\n\nPASSAGES:\n{passages}"
             ),
             schema=_GradeOut,
-            system="You are a strict retrieval-quality grader for a RAG system.",
-            temperature=0.0,
+            settings=ModelSettings(
+                system="You are a strict retrieval-quality grader for a RAG system.",
+                temperature=0.0,
+            ),
         )

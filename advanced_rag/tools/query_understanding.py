@@ -16,8 +16,9 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from .config import Settings, get_settings
-from .gemini import Gemini
+from advanced_rag.core.config import Settings, get_settings
+from advanced_rag.llm.gemini import Gemini
+from advanced_rag.schema.schema import ModelSettings
 
 
 class _Rewrites(BaseModel):
@@ -42,8 +43,10 @@ class QueryUnderstanding:
                 f"Question: {question}"
             ),
             schema=_Rewrites,
-            system="You generate high-recall search query variations for a retrieval system.",
-            temperature=0.4,
+            settings=ModelSettings(
+                system="You generate high-recall search query variations for a retrieval system.",
+                temperature=0.4,
+            ),
         )
         seen, queries = set(), [question]
         for q in out.queries:
@@ -64,7 +67,9 @@ class QueryUnderstanding:
                 "do not say you are unsure — this is a retrieval aid, not the final answer.\n\n"
                 f"Question: {question}"
             ),
-            system="You draft hypothetical answer passages for HyDE retrieval.",
-            temperature=0.3,
-            max_output_tokens=256,
+            settings=ModelSettings(
+                system="You draft hypothetical answer passages for HyDE retrieval.",
+                temperature=0.3,
+                max_output_tokens=256,
+            ),
         ).strip() or None

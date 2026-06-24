@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Sequence, Type, TypeVar
 
 import numpy as np
-from core.config import Settings, get_settings
+from advanced_rag.core.config import Settings, get_settings
 from google import genai
 from google.genai import types
 from pydantic import BaseModel

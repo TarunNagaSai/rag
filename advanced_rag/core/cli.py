@@ -11,9 +11,9 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from .config import get_settings
-from .evaluate import Evaluator, load_dataset, report_to_dict
-from .pipeline import RAGPipeline
+from advanced_rag.core.config import get_settings
+from advanced_rag.tools.evaluate import Evaluator, load_dataset, report_to_dict
+from advanced_rag.agents.pipeline import RAGPipeline
 
 app = typer.Typer(add_completion=False, help="Advanced RAG on Google Gemini.")
 console = Console()

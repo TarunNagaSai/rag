@@ -24,9 +24,9 @@ from pathlib import Path
 import networkx as nx
 from pydantic import BaseModel, Field
 
-from .config import Settings, get_settings
-from .gemini import Gemini
-from .schema import Chunk, Scored
+from advanced_rag.core.config import Settings, get_settings
+from advanced_rag.llm.gemini import Gemini
+from advanced_rag.schema.schema import Chunk, ModelSettings, Scored
 
 
 # --------------------------------------------------------------- extraction schema
@@ -97,8 +97,10 @@ class GraphIndex:
                     f"TEXT:\n{text}"
                 ),
                 schema=_Extraction,
-                system="You are an information-extraction engine that builds knowledge graphs.",
-                temperature=0.0,
+                settings=ModelSettings(
+                    system="You are an information-extraction engine that builds knowledge graphs.",
+                    temperature=0.0,
+                ),
             )
         except Exception:
             return _Extraction()
@@ -135,9 +137,11 @@ class GraphIndex:
                 "Summarize this cluster of related entities and relationships into a "
                 "concise paragraph capturing the big-picture themes.\n\n" + fact_block
             ),
-            system="You write query-focused community summaries for GraphRAG.",
-            temperature=0.2,
-            max_output_tokens=256,
+            settings=ModelSettings(
+                system="You write query-focused community summaries for GraphRAG.",
+                temperature=0.2,
+                max_output_tokens=256,
+            ),
         )
 
     # ---------------------------------------------------------------- search
@@ -146,8 +150,10 @@ class GraphIndex:
             out = self.g.generate_structured(
                 prompt=f"List the key entities mentioned or implied in this question.\n\n{question}",
                 schema=_QueryEntities,
-                system="You extract entities to look up in a knowledge graph.",
-                temperature=0.0,
+                settings=ModelSettings(
+                    system="You extract entities to look up in a knowledge graph.",
+                    temperature=0.0,
+                ),
             )
             return [_norm(e) for e in out.entities if e.strip()]
         except Exception:

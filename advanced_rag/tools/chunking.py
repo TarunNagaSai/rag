@@ -19,9 +19,9 @@ import re
 
 import numpy as np
 
-from .config import Settings, get_settings
-from .gemini import Gemini
-from .schema import Chunk, Document
+from advanced_rag.core.config import Settings, get_settings
+from advanced_rag.llm.gemini import Gemini
+from advanced_rag.schema.schema import Chunk, Document
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9])")
 _PARA_SPLIT = re.compile(r"\n\s*\n")

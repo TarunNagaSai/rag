@@ -25,10 +25,10 @@ from statistics import mean
 
 from pydantic import BaseModel, Field
 
-from .config import Settings, get_settings
-from .gemini import Gemini
-from .pipeline import RAGPipeline
-from .schema import Scored
+from advanced_rag.core.config import Settings, get_settings
+from advanced_rag.llm.gemini import Gemini
+from advanced_rag.agents.pipeline import RAGPipeline
+from advanced_rag.schema.schema import ModelSettings, Scored
 
 
 class _Judge(BaseModel):
@@ -84,8 +84,10 @@ class Evaluator:
     def _judge(self, instruction: str) -> float:
         out = self.g.generate_structured(
             prompt=instruction, schema=_Judge,
-            system="You are a strict, calibrated RAG evaluator. Output only the score and reasoning.",
-            temperature=0.0,
+            settings=ModelSettings(
+                system="You are a strict, calibrated RAG evaluator. Output only the score and reasoning.",
+                temperature=0.0,
+            ),
         )
         return max(0.0, min(1.0, out.score))
 

@@ -15,10 +15,9 @@ import re
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
-from .config import Settings, get_settings
-from .gemini import Gemini
-from .schema import Scored
-from schema.schema import ModelSettings
+from advanced_rag.core.config import Settings, get_settings
+from advanced_rag.llm.gemini import Gemini
+from advanced_rag.schema.schema import ModelSettings, Scored
 
 GROUNDING_SYSTEM = (
     "You are a careful question-answering assistant for a retrieval system. "

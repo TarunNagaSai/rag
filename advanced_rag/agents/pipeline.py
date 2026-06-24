@@ -16,17 +16,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .agent import AgentResult, AgenticRAG
-from .chunking import SemanticChunker, chunk_documents
-from .config import Settings, get_settings
-from .gemini import Gemini
-from .generate import Answer, Generator
-from .graph import GraphIndex
-from .loaders import load_path, load_text
-from .retriever import AdvancedRetriever, RetrievalResult
-from .schema import Chunk
-from .store import HybridStore, build_filter
-from schema.schema import ModelSettings
+from advanced_rag.tools.agent import AgentResult, AgenticRAG
+from advanced_rag.tools.chunking import SemanticChunker, chunk_documents
+from advanced_rag.core.config import Settings, get_settings
+from advanced_rag.llm.gemini import Gemini
+from advanced_rag.llm.generate import Answer, Generator
+from advanced_rag.tools.graph import GraphIndex
+from advanced_rag.tools.loaders import load_path, load_text
+from advanced_rag.tools.retriever import AdvancedRetriever, RetrievalResult
+from advanced_rag.schema.schema import Chunk
+from advanced_rag.tools.store import HybridStore, build_filter
+from advanced_rag.schema.schema import ModelSettings
 
 
 @dataclass

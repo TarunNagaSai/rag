@@ -6,7 +6,7 @@ few mutating operations (ingest / chat-memory) with a lock.
 
 Run it:
 
-    uvicorn advanced_rag.api:app --reload          # dev
+    uvicorn advanced_rag.router.api:app --reload   # dev
     arag-api                                        # console script (see pyproject)
 
 The Gemini API key is read from the environment exactly like the CLI
@@ -19,21 +19,21 @@ Interactive docs are served at /docs (Swagger) and /redoc once running.
 
 from __future__ import annotations
 
+import asyncio
 import json
-import re
 import tempfile
 import threading
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, Literal
 
-from agents.pipeline import AskResult, RAGPipeline
-from core.config import get_settings
+from advanced_rag.agents.pipeline import AskResult, RAGPipeline
+from advanced_rag.core.config import get_settings
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from tools.store import HybridStore, build_filter
+from advanced_rag.tools.store import HybridStore
 
 # --------------------------------------------------------------------------- app
 
@@ -294,35 +294,33 @@ def chat(req: ChatRequest) -> AskResponse:
 
 @app.post("/ask/stream")
 async def ask_stream(req: AskRequest) -> StreamingResponse:
-    """Stream the answer as Server-Sent Events (simple retrieval mode only).
+    """Stream the model's reply to the user's message as Server-Sent Events.
 
-    Each event is a JSON object on the ``data:`` line:
-      - ``{"type": "chunk",   "text": "..."}``  — model text as it arrives
-      - ``{"type": "sources", "sources": [...]}`` — citation list with cited flags
-      - ``data: [DONE]``                          — end of stream sentinel
+    Bare LLM passthrough — no retrieval, no grounding. Each event is a JSON
+    object on the ``data:`` line:
+      - ``{"type": "chunk", "text": "..."}``  — model text as it arrives
+      - ``data: [DONE]``                       — end of stream sentinel
     """
-    p = get_pipeline()
-    if not p.store.chunks:
-        raise HTTPException(
-            status_code=409, detail="Index is empty. Ingest documents first."
-        )
-
-    filt = build_filter(req.sources, req.where)
-    rr = p.retriever.retrieve(req.question, filt)
-    sources, stream = p.generator.answer_stream(req.question, rr.evidence)
+    p = get_pipeline()  # only used for its Gemini client (and the 503-on-no-key guard)
 
     async def event_gen() -> AsyncIterator[str]:
-        accumulated: list[str] = []
-        for chunk in stream:
-            accumulated.append(chunk)
-            yield f"data: {json.dumps({'type': 'chunk', 'text': chunk})}\n\n"
-        full_text = "".join(accumulated)
-        cited = sorted({int(m) for m in re.findall(r"\[(\d+)\]", full_text)})
-        sources_out = [
-            {"n": n, "citation": c, "cited": n in cited} for n, c in sources
-        ]
-        yield f"data: {json.dumps({'type': 'sources', 'sources': sources_out})}\n\n"
-        yield "data: [DONE]\n\n"
+        # Retry transient failures (e.g. Gemini 503 "high demand") — but only
+        # before we've emitted any text, since we can't replay a partial stream.
+        for attempt in range(4):
+            started = False
+            try:
+                for chunk in p.g.generate_content_stream(req.question):
+                    started = True
+                    yield f"data: {json.dumps({'type': 'chunk', 'text': chunk})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
+            except Exception as e:  # noqa: BLE001 - surface the message to the client
+                if not started and attempt < 3:
+                    await asyncio.sleep(2**attempt)  # 1s, 2s, 4s backoff
+                    continue
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                yield "data: [DONE]\n\n"
+                return
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
 
@@ -340,7 +338,7 @@ def main() -> None:
     """Console-script entry point (``arag-api``)."""
     import uvicorn
 
-    uvicorn.run("advanced_rag.api:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("advanced_rag.router.api:app", host="0.0.0.0", port=8000, reload=False)
 
 
 if __name__ == "__main__":

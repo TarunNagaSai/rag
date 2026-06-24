@@ -11,9 +11,9 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from .config import Settings, get_settings
-from .gemini import Gemini
-from .schema import Scored
+from advanced_rag.core.config import Settings, get_settings
+from advanced_rag.llm.gemini import Gemini
+from advanced_rag.schema.schema import ModelSettings, Scored
 
 
 class _RankItem(BaseModel):
@@ -50,8 +50,10 @@ class Reranker:
                 f"QUERY: {query}\n\nPASSAGES:\n{passages}"
             ),
             schema=_Ranking,
-            system="You are a precise cross-encoder reranker for retrieval.",
-            temperature=0.0,
+            settings=ModelSettings(
+                system="You are a precise cross-encoder reranker for retrieval.",
+                temperature=0.0,
+            ),
         )
         scores = {r.index: r.relevance for r in ranking.rankings}
         reranked = [

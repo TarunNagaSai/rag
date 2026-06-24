@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .schema import Document
+from advanced_rag.schema.schema import Document
 
 TEXT_SUFFIXES = {".txt", ".md", ".markdown", ".rst"}
 

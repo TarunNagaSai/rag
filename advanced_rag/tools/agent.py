@@ -19,13 +19,13 @@ from enum import Enum
 
 from pydantic import BaseModel, Field
 
-from .config import Settings, get_settings
-from .crag import CRAG, Grade
-from .gemini import Gemini
-from .generate import Answer, Generator
-from .graph import GraphIndex
-from .retriever import AdvancedRetriever
-from .schema import Scored
+from advanced_rag.core.config import Settings, get_settings
+from advanced_rag.tools.crag import CRAG, Grade
+from advanced_rag.llm.gemini import Gemini
+from advanced_rag.llm.generate import Answer, Generator
+from advanced_rag.tools.graph import GraphIndex
+from advanced_rag.tools.retriever import AdvancedRetriever
+from advanced_rag.schema.schema import ModelSettings, Scored
 
 
 class Tool(str, Enum):
@@ -87,8 +87,10 @@ class AgenticRAG:
                 f"QUESTION: {question}"
             ),
             schema=_Plan,
-            system="You are a retrieval planner. Decompose only when it genuinely helps.",
-            temperature=0.1,
+            settings=ModelSettings(
+                system="You are a retrieval planner. Decompose only when it genuinely helps.",
+                temperature=0.1,
+            ),
         )
 
     # -------------------------------------------------------------------- act
@@ -145,7 +147,7 @@ class AgenticRAG:
 
 
 def _summary_chunk(text: str, i: int):
-    from .schema import Chunk
+    from advanced_rag.schema.schema import Chunk
 
     return Chunk(
         id=f"community-{i}", text=text, source="graph://community",
