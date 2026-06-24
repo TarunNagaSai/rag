@@ -12,4 +12,7 @@ ENV NEXT_TELEMETRY_DISABLED=1 \
     WATCHPACK_POLLING=true \
     CHOKIDAR_USEPOLLING=true
 
-CMD ["npm", "run", "dev"]
+# The node_modules named volume persists across rebuilds, so reconcile it with
+# the current lockfile on each start. This is a fast no-op when already in sync
+# and picks up newly added deps without manually resetting the volume.
+CMD ["sh", "-c", "npm install && npm run dev"]
