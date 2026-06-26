@@ -77,6 +77,12 @@ class Settings:
     index_dir: Path = field(
         default_factory=lambda: Path(_env("ARAG_INDEX_DIR", ".arag_index"))
     )
+    database_url: str = field(
+        default_factory=lambda: _env(
+            "DATABASE_URL",
+            "postgresql://bakeryuser:bakerypass@localhost:5434/bakerydb",
+        )
+    )
 
     def require_key(self) -> str:
         if not self.api_key:

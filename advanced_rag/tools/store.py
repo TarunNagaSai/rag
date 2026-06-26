@@ -1,41 +1,55 @@
-"""HybridStore — dense vectors + BM25 lexical, fused with Reciprocal Rank Fusion.
+"""pgvector-backed vector store.
 
-This is the heart of retrieval quality. Dense (embedding) search nails *meaning*;
-BM25 nails *exact tokens* (IDs, SKUs, acronyms, proper nouns). Neither alone is
-enough in production, so we run both and fuse their rankings with RRF — a simple,
-hard-to-beat, parameter-light merge.
+Schema (created on first use):
+  chunks table — one row per child chunk, embedding column is a pgvector
+  HNSW index for fast approximate cosine search.
 
-The store is intentionally a plain in-memory + on-disk structure (numpy matrix +
-JSON). No external vector DB to operate. For very large corpora you'd swap the
-brute-force search for an ANN index (FAISS/ScaNN) — the interface stays the same.
+Hybrid retrieval combines:
+  - Dense:   pgvector cosine similarity  (<=> operator)
+  - Lexical: PostgreSQL full-text search (tsvector / tsquery)
+  - Fusion:  Reciprocal Rank Fusion in Python
 """
 
 from __future__ import annotations
 
 import json
 import re
-from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
-from rank_bm25 import BM25Okapi
+import psycopg2
+import psycopg2.extras
+from pgvector.psycopg2 import register_vector
 
 from advanced_rag.core.config import Settings, get_settings
 from advanced_rag.llm.gemini import Gemini
 from advanced_rag.schema.schema import Chunk, Scored
 
-_TOKEN = re.compile(r"[A-Za-z0-9_]+")
+Filter = Callable[[Chunk], bool]
+
+_DDL = """
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE TABLE IF NOT EXISTS chunks (
+    id          TEXT PRIMARY KEY,
+    text        TEXT        NOT NULL,
+    source      TEXT        NOT NULL,
+    parent_id   TEXT        NOT NULL,
+    parent_text TEXT        NOT NULL,
+    metadata    JSONB       NOT NULL DEFAULT '{}',
+    embedding   vector({dim})
+);
+
+CREATE INDEX IF NOT EXISTS chunks_hnsw_idx
+    ON chunks USING hnsw (embedding vector_cosine_ops);
+"""
 
 
 def _tokenize(text: str) -> list[str]:
-    return _TOKEN.findall(text.lower())
+    return re.findall(r"[A-Za-z0-9_]+", text.lower())
 
 
-def reciprocal_rank_fusion(
-    ranked_lists: list[list[str]], k: int = 60
-) -> dict[str, float]:
-    """RRF: score(d) = sum over lists of 1 / (k + rank(d)). Robust to scale
-    differences between rankers because it only uses *rank*, not raw score."""
+def _rrf(ranked_lists: list[list[str]], k: int = 60) -> dict[str, float]:
     scores: dict[str, float] = {}
     for lst in ranked_lists:
         for rank, doc_id in enumerate(lst):
@@ -43,15 +57,10 @@ def reciprocal_rank_fusion(
     return scores
 
 
-Filter = Callable[[Chunk], bool]
-
-
 def build_filter(
     sources: list[str] | None = None,
     where: dict[str, Any] | None = None,
 ) -> Filter | None:
-    """Construct a metadata predicate. ``where`` matches metadata key==value
-    (or membership when the value is a list)."""
     if not sources and not where:
         return None
 
@@ -75,63 +84,97 @@ class HybridStore:
     def __init__(self, settings: Settings | None = None, gemini: Gemini | None = None):
         self.s = settings or get_settings()
         self.g = gemini or Gemini(self.s)
-        self.chunks: list[Chunk] = []
-        self.embeddings: np.ndarray = np.zeros((0, self.s.embed_dim), dtype=np.float32)
-        self._id_to_idx: dict[str, int] = {}
-        self._bm25: BM25Okapi | None = None
-        self._corpus_tokens: list[list[str]] = []
+        self._conn: psycopg2.extensions.connection | None = None
 
-    # ----------------------------------------------------------------- build
+    # ---------------------------------------------------------------- connect
+    def _connect(self) -> psycopg2.extensions.connection:
+        if self._conn is None or self._conn.closed:
+            self._conn = psycopg2.connect(self.s.database_url)
+            register_vector(self._conn)
+        return self._conn
+
+    def _setup(self) -> None:
+        conn = self._connect()
+        with conn.cursor() as cur:
+            cur.execute(_DDL.format(dim=self.s.embed_dim))
+        conn.commit()
+
+    # ------------------------------------------------------------------- add
     def add(self, chunks: list[Chunk]) -> None:
         if not chunks:
             return
-        new = self.g.embed([c.text for c in chunks])
-        self.embeddings = (
-            new if self.embeddings.size == 0 else np.vstack([self.embeddings, new])
-        )
-        for c in chunks:
-            self._id_to_idx[c.id] = len(self.chunks)
-            self.chunks.append(c)
-        self._rebuild_bm25()
+        self._setup()
 
-    def _rebuild_bm25(self) -> None:
-        self._corpus_tokens = [_tokenize(c.text) for c in self.chunks]
-        self._bm25 = BM25Okapi(self._corpus_tokens) if self._corpus_tokens else None
+        embeddings = self.g.embed([c.text for c in chunks])
+        conn = self._connect()
+        with conn.cursor() as cur:
+            psycopg2.extras.execute_values(
+                cur,
+                """
+                INSERT INTO chunks (id, text, source, parent_id, parent_text, metadata, embedding)
+                VALUES %s
+                ON CONFLICT (id) DO NOTHING
+                """,
+                [
+                    (
+                        c.id,
+                        c.text,
+                        c.source,
+                        c.parent_id,
+                        c.parent_text,
+                        json.dumps(c.metadata),
+                        embeddings[i].tolist(),
+                    )
+                    for i, c in enumerate(chunks)
+                ],
+            )
+        conn.commit()
 
-    # ---------------------------------------------------------------- search
-    def dense_search(self, query_vec: np.ndarray, top_k: int,
-                     allowed: set[int] | None = None) -> list[tuple[str, float]]:
-        if self.embeddings.size == 0:
-            return []
-        sims = self.embeddings @ query_vec  # cosine (all normalized)
-        if allowed is not None:
-            mask = np.full(sims.shape, -np.inf, dtype=np.float32)
-            idx = np.fromiter(allowed, dtype=np.int64, count=len(allowed))
-            mask[idx] = sims[idx]
-            sims = mask
-        n = min(top_k, np.count_nonzero(np.isfinite(sims)))
-        if n <= 0:
-            return []
-        top = np.argpartition(-sims, n - 1)[:n]
-        top = top[np.argsort(-sims[top])]
-        return [(self.chunks[i].id, float(sims[i])) for i in top]
+    # --------------------------------------------------------------- search
+    def dense_search(
+        self, query_vec: np.ndarray, top_k: int, source_filter: str | None = None
+    ) -> list[tuple[str, float]]:
+        conn = self._connect()
+        sql = """
+            SELECT id, 1 - (embedding <=> %s::vector) AS score
+            FROM chunks
+            {where}
+            ORDER BY embedding <=> %s::vector
+            LIMIT %s
+        """.format(where="WHERE source LIKE %s" if source_filter else "")
 
-    def lexical_search(self, query: str, top_k: int,
-                       allowed: set[int] | None = None) -> list[tuple[str, float]]:
-        if self._bm25 is None:
-            return []
-        scores = self._bm25.get_scores(_tokenize(query))
-        order = np.argsort(-scores)
-        out: list[tuple[str, float]] = []
-        for i in order:
-            if allowed is not None and i not in allowed:
-                continue
-            if scores[i] <= 0:
-                break
-            out.append((self.chunks[i].id, float(scores[i])))
-            if len(out) >= top_k:
-                break
-        return out
+        params: list[Any] = [query_vec.tolist()]
+        if source_filter:
+            params.append(f"%{source_filter}%")
+        params += [query_vec.tolist(), top_k]
+
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            return [(row[0], row[1]) for row in cur.fetchall()]
+
+    def lexical_search(
+        self, query: str, top_k: int, source_filter: str | None = None
+    ) -> list[tuple[str, float]]:
+        conn = self._connect()
+        ts_query = " & ".join(_tokenize(query)) or "x"
+        sql = """
+            SELECT id,
+                   ts_rank(to_tsvector('english', text), to_tsquery('english', %s)) AS score
+            FROM chunks
+            WHERE to_tsvector('english', text) @@ to_tsquery('english', %s)
+            {where}
+            ORDER BY score DESC
+            LIMIT %s
+        """.format(where="AND source LIKE %s" if source_filter else "")
+
+        params: list[Any] = [ts_query, ts_query]
+        if source_filter:
+            params.append(f"%{source_filter}%")
+        params.append(top_k)
+
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            return [(row[0], float(row[1])) for row in cur.fetchall()]
 
     def hybrid_search(
         self,
@@ -141,61 +184,107 @@ class HybridStore:
         top_k: int | None = None,
         filt: Filter | None = None,
     ) -> list[Scored]:
-        """Run dense + BM25, fuse with RRF, return fused top_k as Scored chunks."""
         top_k = top_k or self.s.fused_top_k
-        allowed: set[int] | None = None
-        if filt is not None:
-            allowed = {i for i, c in enumerate(self.chunks) if filt(c)}
-            if not allowed:
-                return []
 
-        dense = self.dense_search(query_vec, self.s.dense_top_k, allowed)
-        lexical = self.lexical_search(query, self.s.lexical_top_k, allowed)
-        fused = reciprocal_rank_fusion(
+        dense = self.dense_search(query_vec, self.s.dense_top_k)
+        lexical = self.lexical_search(query, self.s.lexical_top_k)
+
+        fused = _rrf(
             [[d for d, _ in dense], [l for l, _ in lexical]], k=self.s.rrf_k
         )
         ranked = sorted(fused.items(), key=lambda kv: -kv[1])[:top_k]
-        return [
-            Scored(chunk=self.chunks[self._id_to_idx[cid]], score=score, how="rrf")
+
+        # Fetch the actual chunk rows
+        ids = [cid for cid, _ in ranked]
+        if not ids:
+            return []
+
+        chunks_by_id = self._fetch_by_ids(ids)
+        results = [
+            Scored(chunk=chunks_by_id[cid], score=score, how="rrf")
             for cid, score in ranked
+            if cid in chunks_by_id
         ]
 
-    # --------------------------------------------------------- parent lookup
+        if filt:
+            results = [r for r in results if filt(r.chunk)]
+
+        return results
+
+    def _fetch_by_ids(self, ids: list[str]) -> dict[str, Chunk]:
+        conn = self._connect()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, text, source, parent_id, parent_text, metadata "
+                "FROM chunks WHERE id = ANY(%s)",
+                (ids,),
+            )
+            return {
+                row[0]: Chunk(
+                    id=row[0],
+                    text=row[1],
+                    source=row[2],
+                    parent_id=row[3],
+                    parent_text=row[4],
+                    metadata=row[5] if isinstance(row[5], dict) else json.loads(row[5]),
+                )
+                for row in cur.fetchall()
+            }
+
+    # ---------------------------------------------------------- chunk access
+    @property
+    def chunks(self) -> list[Chunk]:
+        conn = self._connect()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, text, source, parent_id, parent_text, metadata FROM chunks"
+            )
+            return [
+                Chunk(
+                    id=row[0],
+                    text=row[1],
+                    source=row[2],
+                    parent_id=row[3],
+                    parent_text=row[4],
+                    metadata=row[5] if isinstance(row[5], dict) else json.loads(row[5]),
+                )
+                for row in cur.fetchall()
+            ]
+
+    def get(self, chunk_id: str) -> Chunk | None:
+        result = self._fetch_by_ids([chunk_id])
+        return result.get(chunk_id)
+
     def parent_text_for(self, chunk: Chunk) -> str:
         return chunk.parent_text
 
-    def get(self, chunk_id: str) -> Chunk | None:
-        idx = self._id_to_idx.get(chunk_id)
-        return self.chunks[idx] if idx is not None else None
-
-    # ------------------------------------------------------------ persistence
-    def save(self, path: str | Path | None = None) -> Path:
-        d = Path(path) if path else self.s.index_dir
-        d.mkdir(parents=True, exist_ok=True)
-        np.save(d / "embeddings.npy", self.embeddings)
-        with open(d / "chunks.jsonl", "w", encoding="utf-8") as f:
-            for c in self.chunks:
-                f.write(json.dumps(c.to_dict(), ensure_ascii=False) + "\n")
-        (d / "meta.json").write_text(
-            json.dumps({"embed_dim": self.s.embed_dim, "count": len(self.chunks)})
-        )
-        return d
+    # ----------------------------------------------------------- persistence
+    def save(self, path=None):
+        # Data lives in PostgreSQL — nothing to flush
+        return path
 
     @classmethod
-    def load(cls, path: str | Path | None = None,
-             settings: Settings | None = None, gemini: Gemini | None = None) -> "HybridStore":
+    def load(
+        cls,
+        path=None,
+        settings: Settings | None = None,
+        gemini: Gemini | None = None,
+    ) -> "HybridStore":
         s = settings or get_settings()
-        d = Path(path) if path else s.index_dir
-        store = cls(s, gemini)
-        store.embeddings = np.load(d / "embeddings.npy")
-        with open(d / "chunks.jsonl", encoding="utf-8") as f:
-            store.chunks = [Chunk.from_dict(json.loads(line)) for line in f]
-        store._id_to_idx = {c.id: i for i, c in enumerate(store.chunks)}
-        store._rebuild_bm25()
+        store = cls(s, gemini or Gemini(s))
+        store._setup()
         return store
 
     @staticmethod
-    def exists(path: str | Path | None = None, settings: Settings | None = None) -> bool:
+    def exists(path=None, settings: Settings | None = None) -> bool:
         s = settings or get_settings()
-        d = Path(path) if path else s.index_dir
-        return (d / "chunks.jsonl").exists() and (d / "embeddings.npy").exists()
+        try:
+            conn = psycopg2.connect(s.database_url)
+            register_vector(conn)
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM chunks")
+                count = cur.fetchone()[0]
+            conn.close()
+            return count > 0
+        except Exception:
+            return False
