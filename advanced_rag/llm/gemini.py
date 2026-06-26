@@ -11,9 +11,12 @@ Why a wrapper at all? Three reasons:
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator, Sequence
-from typing import Type, TypeVar
+from typing import Optional, Type, TypeVar
 
+import langfuse
 import numpy as np
+from rich.__main__ import start
+from advanced_rag.agents import agent
 from advanced_rag.core.config import Settings, get_settings
 from google import genai
 from google.genai import types

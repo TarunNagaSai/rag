@@ -54,6 +54,10 @@ services:
       - ../.env
     environment:
       - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-bakeryuser}:${POSTGRES_PASSWORD:-bakerypass}@db:5432/${POSTGRES_DB:-bakerydb}
+      # Inside the container, localhost is the container itself — reach Langfuse via
+      # its compose service name on the shared network, NOT the host's localhost:3030.
+      - LANGFUSE_BASE_URL=http://langfuse-web:3000
+      - LANGFUSE_HOST=http://langfuse-web:3000
     ports:
       - "0.0.0.0:8000:8000"
     depends_on:
@@ -188,9 +192,35 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_healthy
     env_file:
       - ../.env
     environment: *langfuse-env
+
+  # S3-compatible blob storage for Langfuse event/media uploads. The langfuse-web
+  # and -worker services reference it as host "minio" (see LANGFUSE_S3_*_ENDPOINT
+  # above); without it, trace ingestion fails with "getaddrinfo ENOTFOUND minio".
+  # The entrypoint pre-creates the "langfuse" bucket (path-style) on first boot.
+  minio:
+    image: minio/minio
+    container_name: bakery-os-minio
+    restart: always
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-miniosecret}
+    ports:
+      - "9090:9000"   # API — matches LANGFUSE_S3_*_EXTERNAL_ENDPOINT=http://localhost:9090
+      - "9091:9001"   # web console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
 volumes:
   postgres_data:
@@ -198,3 +228,4 @@ volumes:
   clickhouse_data:
   clickhouse_logs:
   redis_data:
+  minio_data:

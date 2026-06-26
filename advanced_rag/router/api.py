@@ -24,6 +24,8 @@ import json
 import tempfile
 import threading
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from pathlib import Path
 from typing import Any, Literal
 
@@ -34,13 +36,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from advanced_rag.tools.store import HybridStore
-
+from advanced_rag.observability.langufuse import get_langfuse_client, langfuse_lifespan
 # --------------------------------------------------------------------------- app
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+
+    async with langfuse_lifespan(app):
+        yield
+
+
 
 app = FastAPI(
     title="Advanced RAG API",
     version="0.1.0",
     description="Hybrid + GraphRAG + agentic retrieval over Google Gemini.",
+    lifespan=lifespan,
 )
 
 # The Next.js UI runs on :3000 in dev; allow it (and common local hosts).
@@ -304,23 +315,43 @@ async def ask_stream(req: AskRequest) -> StreamingResponse:
     p = get_pipeline()  # only used for its Gemini client (and the 503-on-no-key guard)
 
     async def event_gen() -> AsyncIterator[str]:
-        # Retry transient failures (e.g. Gemini 503 "high demand") — but only
-        # before we've emitted any text, since we can't replay a partial stream.
-        for attempt in range(4):
-            started = False
-            try:
-                async for chunk in p.g.generate_content_stream_async(req.question):
-                    started = True
-                    yield f"data: {json.dumps({'type': 'chunk', 'text': chunk})}\n\n"
-                yield "data: [DONE]\n\n"
-                return
-            except Exception as e:  # noqa: BLE001 - surface the message to the client
-                if not started and attempt < 3:
-                    await asyncio.sleep(2**attempt)  # 1s, 2s, 4s backoff
-                    continue
-                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-                yield "data: [DONE]\n\n"
-                return
+        # The Langfuse generation lives HERE, inside the generator, because this is
+        # where the real streaming work executes — Starlette consumes event_gen()
+        # only AFTER ask_stream() has returned. A `with` in the outer function would
+        # have closed before the first chunk ever arrived.
+        client = get_langfuse_client()
+        with client.start_as_current_observation(
+            name="gemini-stream",
+            as_type="generation",
+            model="gemini-3.1-flash-lite",
+            input=req.question,
+        ) as gen:
+            pieces: list[str] = []
+            # Retry transient failures (e.g. Gemini 503 "high demand") — but only
+            # before we've emitted any text, since we can't replay a partial stream.
+            for attempt in range(4):
+                started = False
+                try:
+                    async for chunk in p.g.generate_content_stream_async(req.question):
+                        pieces.append(chunk)
+                        started = True
+                        yield f"data: {json.dumps({'type': 'chunk', 'text': chunk})}\n\n"
+                    # Streaming finished: hand the assembled answer to the generation.
+                    gen.update(output="".join(pieces))
+                    yield "data: [DONE]\n\n"
+                    return
+                except Exception as e:  # noqa: BLE001 - surface the message to the client
+                    if not started and attempt < 3:
+                        await asyncio.sleep(2**attempt)  # 1s, 2s, 4s backoff
+                        continue
+                    gen.update(
+                        output="".join(pieces),
+                        level="ERROR",
+                        status_message=str(e),
+                    )
+                    yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
 
     return StreamingResponse(
         event_gen(),

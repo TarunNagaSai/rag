@@ -153,3 +153,4 @@ def _summary_chunk(text: str, i: int):
         id=f"community-{i}", text=text, source="graph://community",
         parent_id=f"community-{i}", parent_text=text, metadata={"loc": f"community-{i}"},
     )
+
